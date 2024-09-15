@@ -112,3 +112,49 @@ class StreamConv(Base.BaseLayer):
                 output[..., i, j, :] = operations.matmul(part_stream, expanded_weight)
 
         return output
+
+
+class StreamReLU(Base.BaseLayer):
+    "Use bit shift and and gate to simulate ReLU"
+
+    def __init__(self, seq_len):
+        super().__init__(seq_len)
+
+    def forward(self, x: torch.Tensor):
+        return torch.pow(x + 1, 3) / 4 - 1
+
+    def generate_Sparams(self):
+        return
+
+    def Sforward(self, stream: torch.Tensor):
+        stream1 = torch.roll(stream, shifts=1, dims=-1)
+        stream2 = torch.roll(stream, shifts=2, dims=-1)
+        stream = torch.logical_and(stream, stream1)
+        stream = torch.logical_and(stream, stream2)
+        return stream
+
+
+class StreamTanh(Base.BaseLayer):
+    "Use bit shift and majority gate to simulate Tanh"
+
+    def __init__(self, seq_len):
+        super().__init__(seq_len)
+
+    def forward(self, x: torch.Tensor):
+        x = (x + 1) / 2
+        return 2 * (3 * x**2 - 2 * x**3) - 1
+
+    def generate_Sparams(self):
+        return
+
+    def majourity_gate(
+        self, tensor1: torch.Tensor, tensor2: torch.Tensor, tensor3: torch.Tensor
+    ) -> torch.Tensor:
+        sum_inputs = tensor1 + tensor2 + tensor3
+        return sum_inputs >= 2
+
+    def Sforward(self, stream: torch.Tensor):
+        stream1 = torch.roll(stream, shifts=1, dims=-1)
+        stream2 = torch.roll(stream, shifts=2, dims=-1)
+        stream = self.majourity_gate(stream, stream1, stream2)
+        return stream
