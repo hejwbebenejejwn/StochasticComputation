@@ -18,7 +18,7 @@ YELLOW = "\033[93m"
 BLUE = "\033[94m"
 RESET = "\033[0m"
 MAGENTA = "\033[95m"
-SEQ_LEN = 10000000
+SEQ_LEN = 100000
 trans = Transform(SEQ_LEN)
 
 
@@ -35,7 +35,7 @@ def fit(model: nn.modules.Module, optim, lossfunc, trainloader: DataLoader):
         optim.step()
         for module in model.modules():
             if isinstance(module, layers.StreamLinear):
-                torch.clip(module.weight, -1, 1)
+                module.weight.data.clip_(-1, 1)
 
         with torch.no_grad():
             totalloss += loss.item() * data.size(0)
@@ -65,13 +65,13 @@ def evaluate(
 
 def Sevaluate(model: BaseModel, val_loader: DataLoader):
     model.eval().cpu()
-    model.generate_Sparams()
+    model.module.generate_Sparams()
     correct_top1 = 0
     total = 0
     with torch.no_grad():
         for inputs, labels in val_loader:
             inputs = trans.f2s(inputs / inputs.abs().max())
-            outputs = trans.s2f(model.Sforward(inputs))
+            outputs = trans.s2f(model.module.Sforward(inputs))
             _, predicted_top1 = torch.max(outputs, 1)
             correct_top1 += (predicted_top1 == labels).sum().item()
             total += labels.size(0)
@@ -85,7 +85,7 @@ class DNN(BaseModel):
         super().__init__(seq_len)
         self.fn1 = layers.StreamLinear(28 * 28, 128, seq_len)
         self.fn2 = layers.StreamLinear(128, 10, seq_len)
-        self.ac1 = layers.StreamReLU(seq_len)
+        self.ac1 = layers.BTanh(seq_len, 28 * 28)
         self.drop = nn.Dropout(0.2)
 
     def forward(self, x: torch.Tensor):
@@ -99,7 +99,7 @@ class DNN(BaseModel):
     def Sforward(self, stream: torch.Tensor):
         x = stream.view(-1, 28 * 28, self.seq_len)
         x = self.fn1.Sforward(x)
-        x = self.ac1.Sforward(x)
+        x = self.ac1.Sforward(x, 2300)
         x = self.fn2.Sforward(x)
         return x
 
@@ -137,7 +137,7 @@ def load_data():
 
 
 device = torch.device("cuda")
-model = DNN()
+model = DNN(SEQ_LEN)
 lossfunc = nn.CrossEntropyLoss().to(device)
 train_loader, val_loader, test_loader = load_data()
 
@@ -169,8 +169,11 @@ for epoch in range(100):
         min_val_loss = val_loss
         counter = 0
         test_loss, test_acc1 = evaluate(model, test_loader, lossfunc)
-        S_test_acc1 = Sevaluate(model, test_loader)
         print(MAGENTA + f"test perf: {test_acc1}" + RESET)
-        print(MAGENTA + f"test perf Stream: {S_test_acc1}" + RESET)
+        torch.save(model.state_dict(), "bestmodel.pth")
     else:
         counter += 1
+
+model.load_state_dict(torch.load("bestmodel.pth"))
+S_test_acc1 = Sevaluate(model, test_loader)
+print(MAGENTA + f"SC test perf: {S_test_acc1}" + RESET)

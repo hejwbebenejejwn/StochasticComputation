@@ -24,10 +24,19 @@ def mul(tensor1: torch.Tensor, tensor2: torch.Tensor) -> torch.Tensor:
 
 class APCounter:
     def __init__(self, in_features=16, num_au_layers=1):
+        """sum the -2 dim of input tensor and return a stream of integers ranging from [0, in_features]
+
+        Parameters
+        ----------
+        in_features : int, optional
+            _description_, by default 16
+        num_au_layers : int, optional
+            _description_, by default 1
+        """
         self.num_au_layers = num_au_layers
         self.in_features = in_features
 
-    def approx_unit(self, x: torch.tensor) -> torch.tensor:
+    def approx_unit(self, x: torch.Tensor) -> torch.Tensor:
         seq_len = x.shape[-1]
         half = int(seq_len / 2)
 
@@ -73,7 +82,7 @@ class APCounter:
 
 def matmul(tensor1: torch.Tensor, tensor2: torch.Tensor) -> torch.Tensor:
     """
-    matrix multiplication
+    matrix multiplication, return stream of integers ranging from [0, b]
 
     Parameters
     ----------
@@ -89,10 +98,10 @@ def matmul(tensor1: torch.Tensor, tensor2: torch.Tensor) -> torch.Tensor:
     """
     a, b, seq_len = tensor1.shape
     c = tensor2.size(0)
-    trans = Transform(seq_len)
     apc = APCounter(b)
     output = torch.empty(a, c, seq_len)
     for i in range(c):
         count = apc(mul(tensor1, tensor2[i]))
-        output[:, i, :] = trans.f2s((count.sum(dim=-1) / seq_len * 2 - b) / b)
+        output[:, i, :] = count
+
     return output

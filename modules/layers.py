@@ -12,6 +12,7 @@ class StreamLinear(Base.BaseLayer):
         StreamLinear : Linear layer for stream tensor
         input (batch_size, in_feature, seq_len)
         output (batch_size, out_feature, seq_len)
+        output consists of integers ranging from [0, in_feature]
 
         Parameters
         ----------
@@ -26,16 +27,15 @@ class StreamLinear(Base.BaseLayer):
         self.in_feature = in_feature
         self.out_feature = out_feature
         self.weight = torch.nn.Parameter(torch.Tensor(out_feature, in_feature))
-        self.trans = Transform(seq_len)
         self.apc = operations.APCounter(in_feature)
-        torch.nn.init.uniform_(self.weight, 0.8, 1)
+        torch.nn.init.uniform_(self.weight, -0.1, 0.1)
 
     def generate_Sparams(self):
         "genreate the params for stream deduction"
-        self.Sweight = self.trans.f2s(self.weight)
+        self.Sweight = self.trans.f2s(self.weight.detach())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.linear(x, self.weight, None) / self.in_feature
+        return F.linear(x, self.weight, None)
 
     def Sforward(self, stream: torch.Tensor) -> torch.Tensor:
         assert stream.size(-1) == self.seq_len, "seq_len not aligned"
@@ -49,6 +49,10 @@ class StreamConv(Base.BaseLayer):
         self, seq_len, in_channels, out_channels, kernel=3, stride=1, padding=0
     ):
         """StreamConv: Convolution layer for stream tensor
+
+        input (batch_size, in_channels, height, width, seq_len)
+        input (batch_size, out_channels, height, width, seq_len)
+        output consists of integers ranging from [0, in_feature]
 
         Parameters
         ----------
@@ -78,15 +82,11 @@ class StreamConv(Base.BaseLayer):
 
     def generate_Sparams(self):
         "genreate the params for stream deduction"
-        self.Sweight = self.trans.f2s(self.weight)
+        self.Sweight = self.trans.f2s(self.weight.detach())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.pad(x, (self.padding,) * 4, mode="constant", value=-1)
-        return (
-            F.conv2d(x, self.weight, None, self.stride)
-            / self.in_channels
-            / self.kernel**2
-        )
+        return F.conv2d(x, self.weight, None, self.stride)
 
     def Sforward(self, stream: torch.Tensor):
         assert stream.size(-1) == self.seq_len, "seq_len not aligned"
@@ -114,47 +114,32 @@ class StreamConv(Base.BaseLayer):
         return output
 
 
-class StreamReLU(Base.BaseLayer):
-    "Use bit shift and and gate to simulate ReLU"
-
-    def __init__(self, seq_len):
+class BTanh(Base.BaseLayer):
+    def __init__(self, seq_len, in_feature):
         super().__init__(seq_len)
+        self.in_feature = in_feature
 
-    def forward(self, x: torch.Tensor):
-        return torch.pow(x + 1, 3) / 4 - 1
 
     def generate_Sparams(self):
         return
 
-    def Sforward(self, stream: torch.Tensor):
-        stream1 = torch.roll(stream, shifts=1, dims=-1)
-        stream2 = torch.roll(stream, shifts=2, dims=-1)
-        stream = torch.logical_and(stream, stream1)
-        stream = torch.logical_and(stream, stream2)
-        return stream
+    def Sforward(self, inputs: torch.Tensor, r: int):
+        s_max = r - 1
+        s_half = (r - 1) / 2
 
+        s = torch.full(inputs.shape[:-1], s_half - 0.5, dtype=torch.int16)
+        inputs = inputs * 2 - self.in_feature
 
-class StreamTanh(Base.BaseLayer):
-    "Use bit shift and majority gate to simulate Tanh"
+        out = torch.zeros(inputs.shape, dtype=torch.bool)
 
-    def __init__(self, seq_len):
-        super().__init__(seq_len)
+        for i in range(self.seq_len):
+            s = s + inputs[..., i]
+            overflow_idx = s > s_max
+            underflow_idx = s < 0
+            s[overflow_idx] = s_max
+            s[underflow_idx] = 0
+            out[..., i] = s > s_half
+        return out
 
-    def forward(self, x: torch.Tensor):
-        x = (x + 1) / 2
-        return 2 * (3 * x**2 - 2 * x**3) - 1
-
-    def generate_Sparams(self):
-        return
-
-    def majourity_gate(
-        self, tensor1: torch.Tensor, tensor2: torch.Tensor, tensor3: torch.Tensor
-    ) -> torch.Tensor:
-        sum_inputs = tensor1 + tensor2 + tensor3
-        return sum_inputs >= 2
-
-    def Sforward(self, stream: torch.Tensor):
-        stream1 = torch.roll(stream, shifts=1, dims=-1)
-        stream2 = torch.roll(stream, shifts=2, dims=-1)
-        stream = self.majourity_gate(stream, stream1, stream2)
-        return stream
+    def forward(self, inputs, scale=1):
+        return torch.tanh(scale * inputs)
