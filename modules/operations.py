@@ -105,3 +105,18 @@ def matmul(tensor1: torch.Tensor, tensor2: torch.Tensor) -> torch.Tensor:
         output[:, i, :] = count
 
     return output
+
+def tanh(tensor1: torch.Tensor) -> torch.Tensor:
+    tensor2 = tensor1.roll(1, -1)
+    tensor3 = tensor1.roll(2, -1)
+    return (tensor1 + tensor2 + tensor3) > 1
+
+
+def clip(tensor1: torch.Tensor,in_feature)->torch.Tensor:
+    seq_len=tensor1.size(-1)
+    trans=Transform(seq_len)
+    float_tensor=2*tensor1.sum(dim=-1)/seq_len-in_feature
+    clipped_tensor=torch.clip(float_tensor,-1,1)
+    return trans.f2s(clipped_tensor)
+
+    

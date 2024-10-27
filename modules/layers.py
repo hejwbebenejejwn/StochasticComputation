@@ -115,31 +115,95 @@ class StreamConv(Base.BaseLayer):
 
 
 class BTanh(Base.BaseLayer):
-    def __init__(self, seq_len, in_feature):
+    def __init__(self, seq_len):
         super().__init__(seq_len)
-        self.in_feature = in_feature
-
 
     def generate_Sparams(self):
         return
 
-    def Sforward(self, inputs: torch.Tensor, r: int):
-        s_max = r - 1
-        s_half = (r - 1) / 2
+    def Sforward(self, inputs: torch.Tensor):
+        return operations.tanh(inputs.to(int))
 
-        s = torch.full(inputs.shape[:-1], s_half - 0.5, dtype=torch.int16)
-        inputs = inputs * 2 - self.in_feature
+    def forward(self, x: torch.Tensor):
+        return ((x + 1) ** 2 * (2 - x)) / 2 - 1
 
-        out = torch.zeros(inputs.shape, dtype=torch.bool)
 
-        for i in range(self.seq_len):
-            s = s + inputs[..., i]
-            overflow_idx = s > s_max
-            underflow_idx = s < 0
-            s[overflow_idx] = s_max
-            s[underflow_idx] = 0
-            out[..., i] = s > s_half
-        return out
+class Majority_k(Base.BaseLayer):
+    def __init__(self, in_features, k, seq_len):
+        super().__init__(seq_len)
+        self.in_features = in_features
+        self.k = k
+        assert (k < in_features) and (k >= 0)
 
-    def forward(self, inputs, scale=1):
-        return torch.tanh(scale * inputs)
+    def generate_Sparams(self):
+        return
+
+    def Sforward(self, inputs: torch.Tensor, k=None) -> torch.Tensor:
+        """apply Majority_k on input stream
+
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            (batch_size, in_features, seq_len), each (in_features, seq_len) in batch_size is streams of a probability sequence
+        k : int, optional
+            majority threshold, Majority_0 == any, Majority_(n-1) == all
+
+        Returns
+        -------
+        torch.Tensor
+            (batch_size, seq_len), each (seq_len,) in batch_size is the result stream of Majority_k of input (in_features, seq_len)
+        """
+        if k is None:
+            k = self.k
+
+        inputs = inputs.sum(dim=-2)
+
+        return inputs > k
+
+    def rawforward(self, inputs: torch.Tensor, k=None) -> torch.Tensor:
+        """probability calculation of Majority_k, return 1-cdf_Poisson_binomial(k)
+
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            (batch_size, in_features), each row is a probability sequence in range [0,1]
+        k : int, optional
+            majority threshold, Majority_0 == any, Majority_(n-1) == all
+
+        Returns
+        -------
+        torch.Tensor
+            (batch_size,)
+        """
+        if k is None:
+            k = self.k
+        assert self.in_features == inputs.shape[1]
+        assert k >= 0 and k < self.in_features
+        pmf = torch.zeros(inputs.shape[0], k + 1)
+        pmf[:, 0] = 1
+
+        for i in range(self.in_features):
+            p = inputs[:, i]
+            pmf[:, 1:] = (pmf[:, 1:].T * (1 - p) + pmf[:, :-1].T * p).T
+            pmf[:, 0] *= 1 - p
+
+        return 1 - pmf.sum(dim=-1)
+
+    def forward(self, inputs: torch.Tensor, k=None) -> torch.Tensor:
+        """float calculation of Majority_k
+
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            (batch_size, in_features), each row is a float sequence in range [-1,1]
+        k : int, optional
+            majority threshold, Majority_0 == any, Majority_(n-1) == all
+
+        Returns
+        -------
+        torch.Tensor
+            (batch_size,)
+        """
+        inputs = (inputs + 1) / 2
+        inputs = self.rawforward(inputs, k)
+        return 2 * inputs - 1
