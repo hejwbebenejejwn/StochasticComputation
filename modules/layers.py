@@ -5,14 +5,13 @@ from modules.transform import Transform
 
 
 class StreamLinear(Base.BaseLayer):
-    "Linear layer for stream tensor"
+    "Linear layer for stream tensor (multiplication only, no summing)"
 
     def __init__(self, in_feature, out_feature, seq_len):
         """
-        StreamLinear : Linear layer for stream tensor
+        StreamLinear : Linear layer for stream tensor (multiplication only, no summing)
         input (batch_size, in_feature, seq_len)
-        output (batch_size, out_feature, seq_len)
-        output consists of integers ranging from [0, in_feature]
+        output (batch_size, out_feature, in_feature, seq_len)
 
         Parameters
         ----------
@@ -27,7 +26,6 @@ class StreamLinear(Base.BaseLayer):
         self.in_feature = in_feature
         self.out_feature = out_feature
         self.weight = torch.nn.Parameter(torch.Tensor(out_feature, in_feature))
-        self.apc = operations.APCounter(in_feature)
         torch.nn.init.uniform_(self.weight, -0.1, 0.1)
 
     def generate_Sparams(self):
@@ -35,11 +33,12 @@ class StreamLinear(Base.BaseLayer):
         self.Sweight = self.trans.f2s(self.weight.detach())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.linear(x, self.weight, None)
+        x = x.unsqueeze(1)
+        return (x * self.weight + x + self.weight.unsqueeze(0) + 1) / 2 - 1
 
     def Sforward(self, stream: torch.Tensor) -> torch.Tensor:
         assert stream.size(-1) == self.seq_len, "seq_len not aligned"
-        return operations.matmul(stream, self.Sweight)
+        return torch.logical_and(stream.unsqueeze(1), self.Sweight)
 
 
 class StreamConv(Base.BaseLayer):
